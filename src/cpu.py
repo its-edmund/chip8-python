@@ -1,9 +1,10 @@
 import pygame
 from pygame.locals import *
-import keyboard
+from pynput import keyboard
 import random
 from enum import Enum
 import time
+import sys
 
 class Display():
     def __init__(self):
@@ -13,15 +14,21 @@ class Display():
         self.screen = pygame.display.set_mode((640, 320));
         self.screen.fill((0, 0, 0))
 
+    def print_display(self):
+        pp = []
+        for j in range(32):
+            for i in range(64):
+                pp += "" + str(self.grid[j * 64 + i])
+            pp += '\n'
 
     def clear_display(self):
-        self.display = [0] * 2048
+        self.grid = [0] * 2048
         self.update_display()
 
     def update_display(self):
         for x in range(64):
             for y in range(32):
-                if self.grid[x * 32 + y] == 1:
+                if self.grid[y * 64 + x] == 1:
                     self.draw_pixel(x, y)
                 else:
                     self.clear_pixel(x, y)
@@ -46,6 +53,26 @@ class chip8():
         self.dt = 0x00
         self.st = 0x00
         self.display = display
+        self.currentkey = set()
+
+        self.keyboardmap = {
+            "1": "1",
+            "2": "2",
+            "3": "3",
+            "4": "C",
+            "q": "4",
+            "w": "5",
+            "e": "6",
+            "r": "D",
+            "a": "7",
+            "s": "8",
+            "d": "9",
+            "f": "e",
+            "z": "a",
+            "x": "0",
+            "c": "b",
+            "v": "f",
+        }
 
         sprites = [
                 0xf0, 0x90, 0x90, 0x90, 0xf0,
@@ -69,6 +96,20 @@ class chip8():
         for i in range(len(sprites)):
             self.wr(sprites[i], i)
 
+    def on_press(self, key):
+        try:
+            if key.char in self.keyboardmap.keys():
+                self.currentkey.add(self.keyboardmap[key.char])
+        except AttributeError:
+            if key in self.keyboardmap.keys():
+                self.currentkey.add(self.keyboardmap[key])
+
+    def on_release(self, key):
+        try:
+            self.currentkey.discard(self.keyboardmap[key.char])
+        except AttributeError:
+            self.currentkey.add(self.keyboardmap[key])
+
     def wr(self, dat, addr, size = 1):
         dat = dat.to_bytes(size, byteorder='big')
         self.mem = self.mem[:addr] + dat + self.mem[addr + size:]
@@ -82,8 +123,8 @@ class chip8():
     def pop_stack(self):
         if self.sp == 0:
             raise Exception("Stack is empty")
-        val = self.stack[self.sp]
         self.sp -= 1
+        val = self.stack[self.sp]
         return val
 
     def step(self):
@@ -102,17 +143,15 @@ class chip8():
     def decode(self, inst):
         opcode = int(inst) & 0xf000
         
-        # clear display
         if inst == 0x00e0:
-            pass
-        # return from subroutine
+            self.display.clear_display()
         elif inst == 0x00ee:
             self.pc = self.pop_stack()
         elif opcode == 0x1000:
             self.pc = inst & 0x0fff
         elif opcode == 0x2000:
             self.push_stack(self.pc)
-            self.pc = inst & 0x0fff
+            self.pc = (inst & 0x0fff)
         elif opcode == 0x3000:
             if self.regfile[(inst & 0x0f00) >> 8] == (inst & 0x00ff):
                 self.pc += 2
@@ -127,7 +166,7 @@ class chip8():
             self.regfile[x] = (inst & 0x00ff)
         elif opcode == 0x7000:
             x = (inst & 0x0f00) >> 8
-            self.regfile[x] = self.regfile[x] + (inst & 0x00ff)
+            self.regfile[x] = (self.regfile[x] + (inst & 0x00ff)) % 256
         elif inst & 0xf00f == 0x8000:
             x = (inst & 0x0f00) >> 8
             y = (inst & 0x00f0) >> 4
@@ -143,7 +182,7 @@ class chip8():
         elif inst & 0xf00f == 0x8003:
             x = (inst & 0x0f00) >> 8
             y = (inst & 0x00f0) >> 4
-            self.regfile[x] = self.regfile[x] & self.regfile[y]
+            self.regfile[x] = self.regfile[x] ^ self.regfile[y]
         elif inst & 0xf00f == 0x8004:
             x = (inst & 0x0f00) >> 8
             y = (inst & 0x00f0) >> 4
@@ -156,34 +195,41 @@ class chip8():
         elif inst & 0xf00f == 0x8005:
             x = (inst & 0x0f00) >> 8
             y = (inst & 0x00f0) >> 4
-            if self.regfile[x] > self.regfile[y]:
+            if self.regfile[x] >= self.regfile[y]:
                 self.regfile[0xf] = 1
             else:
                 self.regfile[0xf] = 0
-            self.regfile[x] = self.regfile[x] - self.regfile[y]
+            result = self.regfile[x] + (~self.regfile[y] + 1)
+            if result < 0:
+                result += 256
+            self.regfile[x] = result
         elif inst & 0xf00f == 0x8006:
             x = (inst & 0x0f00) >> 8
             y = (inst & 0x00f0) >> 4
-            if self.regfile[x] & 0xf == 1:
+            if self.regfile[x] & 1 == 1:
                 self.regfile[0xf] = 1
             else:
                 self.regfile[0xf] = 0
-            self.regfile[x] = self.regfile[x] >> 1
+            self.regfile[x] = self.regfile[x] // 2
         elif inst & 0xf00f == 0x8007:
             x = (inst & 0x0f00) >> 8
             y = (inst & 0x00f0) >> 4
-            if self.regfile[y] > self.regfile[x]:
+            if self.regfile[y] >= self.regfile[x]:
                 self.regfile[0xf] = 1
             else:
                 self.regfile[0xf] = 0
+            result = self.regfile[y] - self.regfile[x]
+            if result < 0:
+                result += 256
+            self.regfile[y] = result
         elif inst & 0xf00f == 0x800e:
             x = (inst & 0x0f00) >> 8
             y = (inst & 0x00f0) >> 4
-            if (self.regfile[x] & 0xf0) >> 4 == 1:
+            if ((self.regfile[x]) >> 8) & 1 == 1:
                 self.regfile[0xf] = 1
             else:
                 self.regfile[0xf] = 0
-            self.regfile[x] = self.regfile[x] << 1
+            self.regfile[x] = (self.regfile[x] * 2) % 256
         elif inst & 0xf00f == 0x9000:
             x = (inst & 0x0f00) >> 8
             y = (inst & 0x00f0) >> 4
@@ -209,30 +255,26 @@ class chip8():
                     break
                 row = int.from_bytes(self.mem[self.I + i:self.I + i + 1], byteorder='big')
                 xcoord = self.regfile[x] % 64
+                xcoord += 8
                 while row != 0:
-                    print(xcoord, ycoord)
-                    if xcoord > 64:
-                        break
-                    if row & 1 == 1:
-                        if self.display.grid[ycoord * 64 + xcoord] == 1:
-                            self.display.grid[ycoord * 64 + xcoord] = 0
-                            # self.display.clear_pixel(xcoord, ycoord)
-                            self.regfile[0xf] = 1
-                        else:
-                            self.display.grid[ycoord * 64 + xcoord] = 1
-                            # self.display.draw_pixel(xcoord, ycoord)
+                    if xcoord < 64:
+                        if row & 1 == 1:
+                            if self.display.grid[ycoord * 64 + xcoord - 1] == 1:
+                                self.display.grid[ycoord * 64 + xcoord - 1] = 0
+                                self.regfile[0xf] = 1
+                            else:
+                                self.display.grid[ycoord * 64 + xcoord - 1] = 1
                     row = row >> 1
-                    xcoord += 1
+                    xcoord -= 1
                 ycoord += 1
-            #pygame.display.update()
             self.display.update_display()
         elif inst & 0xf0ff == 0xe09e:
             x = (inst & 0x0f00) >> 8
-            if keyboard.read_key() == self.regfile[x]:
+            if ("%1x" % self.regfile[x]) in self.currentkey:
                 self.pc += 2
         elif inst & 0xf0ff == 0xe0a1:
             x = (inst & 0x0f00) >> 8
-            if keyboard.read_key() != self.regfile[x]:
+            if ("%1x" % self.regfile[x]) not in self.currentkey:
                 self.pc += 2
         elif inst & 0xf0ff == 0xf007:
             x = (inst & 0x0f00) >> 8
@@ -240,9 +282,9 @@ class chip8():
         elif inst & 0xf0ff == 0xf00a:
             x = (inst & 0x0f00) >> 8
             # TODO get keypress
-            while True:
-                if keyboard.is_pressed('q'):
-                    break
+            while self.currentkey == '':
+                if self.currentkey != '':
+                    self.regfile[x] = self.currentkey
         elif inst & 0xf0ff == 0xf015:
             x = (inst & 0x0f00) >> 8
             self.dt = self.regfile[x]
@@ -252,47 +294,120 @@ class chip8():
         elif inst & 0xf0ff == 0xf01e:
             x = (inst & 0x0f00) >> 8
             self.I = self.I + self.regfile[x]
+        elif inst & 0xf0ff == 0xf029:
+            x = (inst & 0x0f00) >> 8
+            self.I = self.regfile[x] * 5
+        elif inst & 0xf0ff == 0xf033:
+            x = (inst & 0x0f00) >> 8
+            self.wr(self.regfile[x] % 10, self.I + 2)
+            self.wr((self.regfile[x] // 10) % 10, self.I + 1)
+            self.wr((self.regfile[x] // 100) % 10, self.I)
+        elif inst & 0xf0ff == 0xf055:
+            x = (inst & 0x0f00) >> 8
+            for i in range(x + 1):
+                print(i)
+                self.wr(self.regfile[i], self.I + i)
+        elif inst & 0xf0ff == 0xf065:
+            x = (inst & 0x0f00) >> 8
+            for i in range(x + 1):
+                self.regfile[i] = self.mem[self.I + i]
 
     def dump(self):
         pp = []
-        for i in range(len(self.regfile)):
-            pp.append("0x" + str(i) + ": " + str(self.regfile[i]) + " ")
+        for i in range(16):
+            if i != 0 and i % 8 == 0:
+                pp += "\n"
+            pp += " %3s: %08x" % ("x%x" % i, self.regfile[i])
+        pp += "\n   I: %08x" % (self.I)
+        pp += "\n  PC: %08x" % (self.pc)
+        pp += "\nStack:"
+        if self.sp == 0:
+            pp += "\n(empty)"
+        else:
+            for i in range(self.sp):
+                pp += '\n' + str(self.stack[self.sp - i - 1])
         print(''.join(pp))
-
 
 
 if __name__ == '__main__':
     display = Display()
     c8 = chip8(display)
+    debug = False
     # pygame.draw.rect(screen, (255, 255, 255), Rect(10, 10, 10, 10))
-    instructions = open('../tests/printa.txt', 'r')
-    lines = instructions.readlines()
+    instructions = open('/Users/edmundxin/dev/chip-8/chip8-python/tests/printa.txt', 'r')
+    with open('/Users/edmundxin/dev/chip-8/chip8-python/tests/tetris.rom', 'rb') as test_binary:
+        j = 0x200
+        while (byte := test_binary.read(1)):
+            c8.mem = c8.mem[:j] + byte + c8.mem[j:]
+            j += 1
 
-    j = 0x200
-    for i in range(0x200, 0x200 + len(lines)):
-        op = int("0x" + lines[i - 0x200], 16)
-        print(((op & 0xff00) >> 8).to_bytes(1, byteorder='big'))
-        print((op & 0xff).to_bytes(1, byteorder='big'))
-        c8.wr((op & 0xff00) >> 8, j, 1)
-        c8.wr((op & 0xff), j + 1, 1)
-        j += 2
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "-d":
+            debug = True
 
+    commandStack = []
 
+    steps = 0
+    listener = keyboard.Listener(
+        on_press=c8.on_press,
+        on_release=c8.on_release)
+    listener.start()
     while True:
         c8.step()
-        c8.dump()
+        if debug:
+            while True:
+                if steps > 0:
+                    print(steps)
+                    steps -= 1
+                    break
+                command = input("(debug) ")
+                # if command == '':
+                #     command = commandStack[-1]
+                #     print()
+                if command and command.split(" ")[0] == "s":
+                    instruction = int.from_bytes(c8.mem[c8.pc:c8.pc + 2], byteorder='big')
+                    print("Current instruction: 0x%04x" % instruction)
+                    print("PC: %08x" % (c8.pc))
+                    commandStack.append('s')
+                    if len(command.split(" ")) != 1:
+                        steps = int(command.split(" ")[1])
+                        print(steps)
+                    break
+                elif command == "p":
+                    c8.dump()
+                    commandStack.append('p')
+                elif command == 'h':
+                    print("Just kidding, there is no help")
+                    commandStack.append('h')
+                elif command == "c":
+                    debug = False
+                    commandStack.append('c')
+                    break
+                elif command == "d":
+                    display.print_display()
+                    commandStack.append('d')
+                elif command and command[0] == "x":
+                    params = command.split(" ")
+                    if len(params) < 2:
+                        print("Please include address to inspect")
+                        break
+                    addr = int(params[1], 16)
+                    pp = []
+                    for i in range(addr, addr + 128, 2):
+                        if (i - addr) != 0 and (i - addr) % 16 == 0:
+                            pp += "\n"
+                        if (i - addr) % 16 == 0:
+                            pp += "%08x: " % i
+                        if (i - addr) % 2 == 0:
+                            pp += " "
+                        pp += c8.mem[i:i+2].hex().upper()
+                    print(''.join(pp))
+                    commandStack.append('x')
+                else:
+                    print('Command not found. Type (h) for help.')
+        # c8.dump()
         
-        print('step')
-        while True:
-            if keyboard.is_pressed('q'):
-                break
-        display.draw_pixel(0, 0)
-        display.draw_pixel(1, 1)
-        display.draw_pixel(2, 2)
-        display.draw_pixel(3, 3)
-        display.draw_pixel(4, 4)
-        pygame.display.update()
-        time.sleep(0.1)
+        time.sleep(0.005)
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:

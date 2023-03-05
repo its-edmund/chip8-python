@@ -6,6 +6,7 @@ name = "pypi"
 [packages]
 pygame = "*"
 keyboard = "*"
+pynput = "*"
 
 [dev-packages]
 
